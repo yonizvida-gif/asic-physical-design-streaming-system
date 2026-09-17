@@ -1,0 +1,29 @@
+# Quartus generated directories
+db/
+incremental_db/
+output_files/
+/simulation/
+.qsys_edit/
+
+# Generated IP files
+*.sopcinfo
+
+# Simulation activity files
+*.vcd
+*.wlf
+
+# Backup files
+*.bak
+
+# Quartus reports and temporary files
+*.rpt
+*.smsg
+
+# Programming files
+*.sof
+*.pof
+*.jdi
+
+# OS files
+Thumbs.db
+.DS_Store
