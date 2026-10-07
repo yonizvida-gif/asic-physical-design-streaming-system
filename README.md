@@ -1,35 +1,38 @@
-# VLSI FPGA Streaming System
+# SystemVerilog Streaming System - FPGA Implementation & ASIC Physical Design
 
-A dual-clock FPGA streaming system implemented in SystemVerilog and targeting the Intel Cyclone IV E FPGA.
+A complete digital design project developed from SystemVerilog RTL through two implementation flows:
 
-The design processes 8-bit input samples using a 4-tap FIR filter, transfers the filtered 16-bit data safely between asynchronous clock domains using an asynchronous FIFO, and transmits the results through a UART transmitter.
+- **FPGA implementation** targeting Intel Cyclone IV E using Quartus Prime
+- **ASIC RTL-to-GDSII Physical Design** targeting SKY130 using OpenLane/OpenROAD
 
-The project also implements dynamic power reduction using hardware clock gating with Intel `ALTCLKCTRL`. After 10 consecutive inactive `clk_fast` cycles, the FIR clock is disabled. A wake-up mechanism preserves the first incoming sample while the gated clock is restarted.
+The design implements a dual-clock streaming system containing a 4-tap FIR filter, asynchronous FIFO for clock-domain crossing, UART transmitter, and dynamic clock gating.
 
-The complete design was synthesized, fitted, functionally verified, analyzed using TimeQuest Static Timing Analysis, and evaluated using Quartus Power Analyzer.
+The original design was synthesized, fitted, functionally verified, timing-analyzed, and power-analyzed as an FPGA implementation. The same RTL architecture was then adapted for an ASIC flow and taken through synthesis, floorplanning, placement, clock tree synthesis, routing, parasitic extraction, multi-corner static timing analysis, physical verification, and final GDSII generation.
 
 ---
 
-## Key Results
+## Project Highlights
 
-| Metric | Result |
-|---|---:|
-| Target FPGA | Intel Cyclone IV E `EP4CE115F29C7` |
-| Fast Clock | 100 MHz |
-| Slow Clock | 10 MHz |
-| UART Baud Rate | 9600 |
-| FIR Taps | 4 |
-| FIR Coefficients | `[1, 2, 3, 4]` |
-| Worst Setup Slack | `+1.450 ns` |
-| Worst Hold Slack | `+0.180 ns` |
-| Design-wide TNS | `0 ns` |
-| Logic Elements | `445` |
-| Registers | `336` |
-| Embedded Memory Bits | `0` |
-| DSP Elements | `0` |
-| Core Dynamic Power, Clock Gating OFF | `8.03 mW` |
-| Core Dynamic Power, Clock Gating ON | `5.11 mW` |
-| Estimated Core Dynamic Power Reduction | `~36.4%` |
+| Area | Result |
+|---|---|
+| RTL | SystemVerilog |
+| Clock Domains | 100 MHz / 10 MHz asynchronous clocks |
+| CDC | Gray-coded asynchronous FIFO with 2-FF synchronizers |
+| Signal Processing | 4-tap FIR filter |
+| Communication | UART TX at 9600 baud |
+| Power Optimization | Hardware clock gating |
+| FPGA Target | Intel Cyclone IV E |
+| ASIC Technology | SKY130 |
+| ASIC Flow | OpenLane / OpenROAD |
+| ASIC Standard-Cell Instances | 1,838 |
+| ASIC Core Utilization | 61.06% |
+| Post-Route Worst Setup Slack | +2.434 ns |
+| Post-Route Worst Hold Slack | +0.088 ns |
+| Setup / Hold TNS | 0 ns / 0 ns |
+| Final DRC Violations | 0 |
+| Antenna Violations | 0 |
+| LVS | Clean |
+| GDSII | Successfully generated |
 
 ---
 
@@ -37,31 +40,114 @@ The complete design was synthesized, fitted, functionally verified, analyzed usi
 
 The system contains two asynchronous clock domains:
 
-- `clk_fast` at 100 MHz
-- `clk_slow` at 10 MHz
+```text
+clk_fast = 100 MHz
+clk_slow = 10 MHz
+```
 
-The main data path is:
+Main data path:
 
 ```text
 data_in / valid_in
         |
         v
-Wake-up Buffer
+  Wake-Up Handling
         |
         v
-4-Tap FIR Filter
+    4-Tap FIR
         |
         v
-Asynchronous FIFO
+ Asynchronous FIFO
         |
         v
-UART Transmitter
+   UART Transmitter
         |
         v
-tx_serial
+    tx_serial
 ```
 
-The clock-gating control path is:
+The FIR operates in the fast clock domain. Filtered samples are transferred safely into the slow clock domain through an asynchronous FIFO and are then transmitted by the UART.
+
+### Top-Level RTL
+
+![Top-Level RTL](project_results/COMMON_DESIGN/rtl.png)
+
+---
+
+# RTL Design
+
+## FIR Filter
+
+The FIR filter uses four taps:
+
+```text
+Coefficients = [1, 2, 3, 4]
+Input width  = 8 bits
+Output width = 16 bits
+```
+
+The filter operates from the gated version of `clk_fast`.
+
+## Asynchronous FIFO
+
+The FIFO transfers 16-bit FIR results between the unrelated clock domains.
+
+CDC protection includes:
+
+- Independent read and write clocks
+- Binary read/write pointers
+- Binary-to-Gray pointer conversion
+- Two-flip-flop pointer synchronizers
+- Full and empty detection
+
+![Async FIFO](project_results/COMMON_DESIGN/fifo.png)
+
+## UART Transmitter
+
+The UART transmitter operates in the 10 MHz `clk_slow` domain and serializes FIFO data at 9600 baud.
+
+## Power Controller
+
+The power controller reduces switching activity in the FIR clock domain.
+
+After 10 consecutive inactive `clk_fast` cycles, the FIR clock is disabled. A new valid input immediately requests clock reactivation.
+
+Wake-up handling preserves the first sample arriving after an idle period.
+
+---
+
+# Clock Domain Crossing
+
+The design intentionally contains two asynchronous clock domains.
+
+Direct multi-bit transfer between these domains is avoided. The asynchronous FIFO forms the CDC boundary, while Gray-coded pointers are passed through two-stage synchronizers.
+
+The clocks are declared asynchronous in SDC:
+
+```tcl
+set_clock_groups -asynchronous \
+    -group [get_clocks {clk_fast}] \
+    -group [get_clocks {clk_slow}]
+```
+
+This prevents invalid synchronous setup/hold analysis between the unrelated clock domains while timing each domain independently.
+
+---
+
+# FPGA Implementation
+
+The original implementation targets:
+
+```text
+Intel Cyclone IV E
+EP4CE115F29C7
+```
+
+The FPGA flow was performed using Intel Quartus Prime Lite.
+
+## FPGA Clock Gating
+
+The FPGA implementation uses Intel `ALTCLKCTRL` for glitch-free hardware clock gating.
 
 ```text
 valid_in
@@ -79,264 +165,45 @@ ALTCLKCTRL
 gated_clk
    |
    v
-FIR Filter
+FIR
 ```
 
-### Top-Level RTL
-
-![Top-Level RTL](project_results/COMMON_DESIGN/rtl.png)
-
----
-
-## RTL Modules
-
-### `top.sv`
-
-Top-level integration module connecting:
-
-- Power controller
-- Intel `ALTCLKCTRL`
-- FIR filter
-- Asynchronous FIFO
-- UART transmitter
-- Wake-up buffer logic
-
-The top-level also contains the input buffering required to preserve the first sample when the FIR clock is restarted after an idle period.
-
-### `power_controller.sv`
-
-Controls the FIR clock enable.
-
-Behavior:
-
-- `clk_en` is enabled after reset.
-- Each valid input resets the inactivity counter.
-- After 10 consecutive inactive `clk_fast` cycles, clock gating is activated.
-- A new `valid_in` request re-enables the clock.
-
-### `FIR.sv`
-
-A 4-tap FIR filter operating in the fast clock domain.
-
-```text
-Coefficients = [1, 2, 3, 4]
-Input width  = 8 bits
-Output width = 16 bits
-```
-
-The FIR processes the recent input samples using a weighted sum.
-
-### `async_fifo.sv`
-
-Transfers 16-bit FIR results safely from `clk_fast` to `clk_slow`.
-
-The FIFO uses:
-
-- Independent read and write clocks
-- Binary read/write pointers
-- Binary-to-Gray pointer conversion
-- Two-flip-flop synchronizers
-- Full and empty detection
-
-### Asynchronous FIFO RTL
-
-![Async FIFO](project_results/COMMON_DESIGN/fifo.png)
-
-### `uart_tx.sv`
-
-Reads 16-bit values from the asynchronous FIFO and transmits them serially at 9600 baud.
-
-The UART operates in the `clk_slow` domain.
-
----
-
-## Clock Domain Crossing
-
-The project contains two asynchronous clock domains:
-
-```text
-clk_fast = 100 MHz
-clk_slow = 10 MHz
-```
-
-Direct multi-bit data transfer between asynchronous clock domains is avoided.
-
-Instead, the asynchronous FIFO provides the CDC boundary.
-
-Pointer synchronization uses Gray-coded pointers and two-stage synchronizers, reducing the risk of metastability when pointer information crosses between the two clock domains.
-
-The SDC file declares the two clocks as asynchronous using:
-
-```tcl
-set_clock_groups -asynchronous \
-    -group [get_clocks {clk_fast}] \
-    -group [get_clocks {clk_slow}]
-```
-
-This prevents TimeQuest from performing invalid synchronous setup and hold analysis between the unrelated clock domains.
-
----
-
-## Clock Gating and Power Management
-
-The FIR uses a gated version of `clk_fast`.
-
-Clock gating is implemented with Intel `ALTCLKCTRL` rather than combinational clock gating such as:
+A simple combinational clock gate such as:
 
 ```systemverilog
-clk_fast & clk_en
+assign gated_clk = clk_fast & clk_en;
 ```
 
-This provides FPGA-supported glitch-free clock control.
-
-### Idle Behavior
-
-After 10 inactive `clk_fast` cycles:
-
-```text
-valid_in = 0
-     |
-     v
-Inactivity counter reaches threshold
-     |
-     v
-clk_en = 0
-     |
-     v
-ALTCLKCTRL stops gated_clk
-     |
-     v
-FIR switching activity is reduced
-```
-
-### Wake-Up Handling
-
-During verification, a wake-up issue was identified.
-
-Initially, the first sample arriving while the FIR clock was disabled could be lost because the `ALTCLKCTRL` required time to restart the gated clock.
-
-A wake-up buffer was added before the FIR.
-
-The final sequence is:
-
-```text
-New sample arrives
-      |
-      v
-Sample is stored
-      |
-      v
-clk_en is asserted
-      |
-      v
-ALTCLKCTRL restarts gated_clk
-      |
-      v
-Stored sample is delivered to FIR
-```
-
-This preserves the first sample after an idle period.
-
----
+was intentionally avoided.
 
 ## Functional Verification
 
-Individual testbenches are included for:
+Individual SystemVerilog testbenches verify:
 
-- FIR
-- Power controller
+- FIR operation
+- Power controller behavior
 - Asynchronous FIFO
 - UART transmitter
-- Complete top-level system
-
-The final top-level verification sequence includes:
-
-```text
-Input Block 1
-     |
-     v
-Idle period
-     |
-     v
-Clock gating activated
-     |
-     v
-Input Block 2
-     |
-     v
-Clock wake-up
-     |
-     v
-FIR -> FIFO -> UART
-```
-
-The input sequence used in the final wake-up test was:
-
-```text
-2, 4, 6, 8, 10
-      |
-      | Idle
-      v
-12, 14, 16, 18, 20
-```
-
-The final simulation verified:
-
-- FIR processing
-- FIFO transfer
-- UART transmission
-- Clock gating after inactivity
-- Clock restart
+- Complete top-level data flow
+- Clock shutdown after inactivity
+- Clock wake-up
 - Preservation of the first sample after wake-up
 
----
-
-## Clock Gating ON
-
-With clock gating enabled:
-
-- `clk_fast` continues running.
-- `clk_en` goes low after the inactivity threshold.
-- `gated_clk` stops toggling.
-- The FIR becomes inactive during the idle period.
-- New data causes the FIR clock to restart.
+### Clock Gating Enabled
 
 ![Clock Gating ON](project_results/CLOCK_GATING_ON/SIMULATION/wave_clock_gating_on.png)
 
----
-
-## Clock Gating OFF
-
-For the power comparison, the same fitted design and the same test stimulus were used, but `clk_en` was forced high during simulation.
-
-Therefore:
-
-- `clk_en = 1`
-- `gated_clk` continues toggling during the idle period.
-- The FIR clock network remains active.
+### Clock Gating Disabled
 
 ![Clock Gating OFF](project_results/CLOCK_GATING_OFF/SIMULATION/wave_clock_gating_off.png)
 
 ---
 
-## Static Timing Analysis
+## FPGA Static Timing Analysis
 
 Timing analysis was performed using Intel TimeQuest.
 
-### Clock Constraints
-
-```tcl
-create_clock -name clk_fast -period 10.000 [get_ports {clk_fast}]
-create_clock -name clk_slow -period 100.000 [get_ports {clk_slow}]
-
-derive_clock_uncertainty
-
-set_clock_groups -asynchronous \
-    -group [get_clocks {clk_fast}] \
-    -group [get_clocks {clk_slow}]
-```
-
-### Final Multicorner Results
+Final FPGA timing results:
 
 ```text
 Worst Setup Slack = +1.450 ns
@@ -344,165 +211,338 @@ Worst Hold Slack  = +0.180 ns
 Design-wide TNS   = 0 ns
 ```
 
-The final design therefore passes both setup and hold timing across the analyzed corners.
-
-### Multicorner Timing Summary
-
-![Multicorner Timing](project_results/COMMON_DESIGN/multicorner_timing_summary.png)
+![FPGA Multicorner Timing](project_results/COMMON_DESIGN/multicorner_timing_summary.png)
 
 ### Worst Setup Path
-
-The worst setup path occurs in the `Slow 1200mV 85C` timing model.
-
-```text
-Worst Setup Slack = +1.450 ns
-```
 
 ![Worst Setup Path](project_results/COMMON_DESIGN/STA_SETUP/worst_setup_path_slow_85C.png)
 
 ### Worst Hold Path
 
-The worst hold path occurs in the `Fast 1200mV 0C` timing model.
-
-```text
-Worst Hold Slack = +0.180 ns
-```
-
 ![Worst Hold Path](project_results/COMMON_DESIGN/STA_HOLD/worst_hold_path_fast_0C.png)
 
----
-
-## Unconstrained I/O Paths
-
-The final TimeQuest report contains:
-
-```text
-Illegal Clocks                  = 0
-Unconstrained Clocks            = 0
-Unconstrained Input Ports       = 10
-Unconstrained Input Port Paths  = 359
-Unconstrained Output Ports      = 1
-Unconstrained Output Port Paths = 1
-```
-
-The unconstrained input ports are:
-
-```text
-data_in[7:0]
-valid_in
-rst_n
-```
-
-The unconstrained output port is:
-
-```text
-tx_serial
-```
-
-No arbitrary `set_input_delay` or `set_output_delay` values were added because the project does not define an external synchronous device timing specification from which valid board-level I/O delays could be derived.
-
-`rst_n` is also an asynchronous reset rather than normal synchronous input data.
-
-![Unconstrained Paths](project_results/COMMON_DESIGN/SDC_UNCONSTRAINED/unconstrained_paths_summary.png)
+The FPGA timing environment intentionally did not assign arbitrary board-level input/output delays because no external synchronous-device timing specification was defined.
 
 ---
 
-## Resource Utilization
-
-Final Quartus compilation results:
+## FPGA Resource Utilization
 
 | Resource | Usage |
 |---|---:|
-| Logic Elements | `445 / 114,480` |
-| Registers | `336` |
-| Pins | `13` |
-| Embedded Memory Bits | `0` |
-| DSP 9-bit Elements | `0` |
-| PLLs | `0` |
+| Logic Elements | 445 / 114,480 |
+| Registers | 336 |
+| Pins | 13 |
+| Embedded Memory Bits | 0 |
+| DSP 9-bit Elements | 0 |
+| PLLs | 0 |
 
-### Resource Usage by Major Module
+The asynchronous FIFO is implemented using FPGA logic/registers rather than embedded memory, while the FIR coefficients are implemented without dedicated DSP blocks.
 
-| Module | Combinational ALUTs | Registers |
-|---|---:|---:|
-| FIR | 39 | 45 |
-| Asynchronous FIFO | 180 | 242 |
-| Power Controller | 8 | 5 |
-| UART TX | 56 | 35 |
-| Top-Level Logic | 0 | 9 |
-
-The asynchronous FIFO is implemented using FPGA logic and registers rather than embedded memory blocks.
-
-The FIR coefficients `[1, 2, 3, 4]` are implemented without dedicated DSP blocks.
-
-![Resource Summary](project_results/COMMON_DESIGN/flow_summary_resources.png)
+![FPGA Resource Summary](project_results/COMMON_DESIGN/flow_summary_resources.png)
 
 ---
 
-## Power Analysis
+## FPGA Power Analysis
 
-Power estimation was performed using Quartus Power Analyzer.
-
-Two activity simulations were compared using the same fitted FPGA design and the same functional stimulus.
-
-The only intended behavioral difference was whether the FIR clock was allowed to stop during idle periods.
-
-### Clock Gating OFF
+Quartus Power Analyzer was used to compare the same fitted design and stimulus with clock gating enabled and disabled.
 
 ```text
-Total Thermal Power = 137.65 mW
-Core Dynamic Power  =   8.03 mW
-Core Static Power   =  98.51 mW
-I/O Power           =  31.12 mW
+Clock Gating OFF:
+Core Dynamic Power = 8.03 mW
+
+Clock Gating ON:
+Core Dynamic Power = 5.11 mW
+
+Estimated Reduction = ~36.4%
 ```
+
+### Clock Gating OFF
 
 ![Power OFF](project_results/CLOCK_GATING_OFF/POWER/power_summary_off.png)
 
 ### Clock Gating ON
 
-```text
-Total Thermal Power = 134.73 mW
-Core Dynamic Power  =   5.11 mW
-Core Static Power   =  98.50 mW
-I/O Power           =  31.12 mW
-```
-
 ![Power ON](project_results/CLOCK_GATING_ON/POWER/power_summary_on.png)
 
-### Dynamic Power Reduction
-
-```text
-Dynamic Power Reduction
-= 8.03 mW - 5.11 mW
-= 2.92 mW
-```
-
-```text
-Percentage Reduction
-= 2.92 / 8.03
-≈ 36.4%
-```
-
-Therefore, the post-fit power estimate shows approximately:
-
-```text
-36.4% reduction in Core Dynamic Power
-```
-
-when clock gating is enabled.
-
-The static power remains nearly unchanged, as expected, because the same physical FPGA resources remain configured in both cases.
-
-### Power Estimation Note
-
-Quartus reported a low power-estimation confidence level because a significant portion of internal post-fit signal activity was estimated using vectorless activity rather than being mapped directly from the RTL VCD.
-
-Therefore, the power results should be interpreted as comparative post-fit power estimates rather than physical board measurements.
-
-The same methodology and stimulus were used for both ON and OFF cases to provide a consistent relative comparison.
+The result represents a comparative post-fit power estimate rather than a physical board measurement. Quartus reported limited power-estimation confidence because some internal activity was estimated vectorlessly.
 
 ---
 
-## Repository Structure
+# ASIC Physical Design
+
+The RTL architecture was subsequently adapted for a complete ASIC Physical Design flow using:
+
+- OpenLane 2
+- OpenROAD
+- Yosys
+- OpenSTA
+- KLayout
+- Magic
+- Netgen
+- SKY130 PDK
+- SKY130 HD standard-cell library
+
+The implementation was taken from RTL through final GDSII.
+
+```text
+SystemVerilog RTL
+        |
+        v
+     Synthesis
+        |
+        v
+    Floorplanning
+        |
+        v
+ Power Distribution
+        |
+        v
+     Placement
+        |
+        v
+Clock Tree Synthesis
+        |
+        v
+   Timing Repair
+        |
+        v
+   Global Routing
+        |
+        v
+ Detailed Routing
+        |
+        v
+Parasitic Extraction
+        |
+        v
+Multi-Corner STA
+        |
+        v
+ Physical Signoff
+        |
+        v
+      GDSII
+```
+
+---
+
+## FPGA-to-ASIC Clock-Gating Adaptation
+
+The Intel `ALTCLKCTRL` primitive used by the FPGA implementation is device-specific and cannot be used in a standard-cell ASIC flow.
+
+For the ASIC implementation, it was replaced with a SKY130 integrated clock-gating cell:
+
+```text
+sky130_fd_sc_hd__dlclkp_1
+```
+
+The clock-gating control behavior remains part of the RTL architecture, while the implementation uses a technology-appropriate glitch-free clock cell.
+
+This also allows the gated FIR clock to participate correctly in clock-tree synthesis and static timing analysis.
+
+---
+
+# ASIC Timing Constraints
+
+Two primary clocks are defined:
+
+```tcl
+create_clock -name clk_fast -period 10.000 [get_ports {clk_fast}]
+create_clock -name clk_slow -period 100.000 [get_ports {clk_slow}]
+```
+
+The two domains are declared asynchronous.
+
+For the ASIC implementation, explicit interface assumptions were introduced:
+
+```text
+Input delay minimum = 0.5 ns
+Input delay maximum = 2.0 ns
+Clock uncertainty   = 0.2 ns
+```
+
+These values are design assumptions for the portfolio implementation rather than measured board/interface specifications.
+
+`rst_n` is an asynchronous reset and is intentionally not modeled as ordinary synchronous input data.
+
+`tx_serial` is a protocol-driven UART serial output rather than an externally synchronous output and is intentionally excluded from synchronous output timing analysis.
+
+The broad reset false-path approach was intentionally avoided so that reset-related timing behavior is not silently hidden.
+
+---
+
+# Floorplanning and Placement
+
+The final ASIC implementation contains:
+
+```text
+Standard-cell instances = 1,838
+Standard-cell area      = 18,630.4 um^2
+Core utilization        = 61.06%
+Macros                  = 0
+```
+
+Final die dimensions are approximately:
+
+```text
+186.585 um x 197.305 um
+```
+
+The design is implemented entirely using standard cells without embedded hard macros.
+
+---
+
+# Clock Tree Synthesis
+
+CTS builds physical clock distribution networks for:
+
+- `clk_fast`
+- `clk_slow`
+- Gated FIR clock
+
+The clock tree uses inserted clock buffers/inverters to control clock latency, transition, fanout, and skew.
+
+![CTS Clock Buffers](physical_design/images/03_CTS_Clock_Buffers.png)
+
+After CTS, hold analysis exposed short data paths that required repair. Timing-repair buffers were inserted automatically to increase minimum data-path delay while preserving setup timing.
+
+![Post-CTS Hold Repair](physical_design/images/04_Post-CTS_Hold_Repair.png)
+
+![Post-CTS STA](physical_design/images/05_Post-CTS_STA_After_Hold_Repair.png)
+
+---
+
+# Global Routing
+
+Global routing determines coarse routing paths and evaluates routing-resource demand before exact wire geometry is generated.
+
+The final routing process achieved zero global-routing overflow.
+
+![Global Routing Congestion](physical_design/images/07_Global_Routing_Congestion_Heatmap.png)
+
+---
+
+# Detailed Routing
+
+Detailed routing assigns exact tracks, metal layers, and vias while satisfying physical design rules.
+
+Routing-rule violations were iteratively repaired until the detailed router reached zero remaining violations.
+
+![Detailed Routing - Zero Violations](physical_design/images/08_Detailed_Routing_Zero_Violations.png)
+
+### Routed Metal Layers
+
+![Detailed Routing Metal Layers](physical_design/images/09_Detailed_Routing_Metal_Layers.png)
+
+---
+
+# Parasitic Extraction and Post-Route STA
+
+After routing, interconnect resistance and capacitance were extracted and included in timing analysis.
+
+Post-route timing was evaluated across nine PVT/RC analysis combinations.
+
+Final worst-case results:
+
+```text
+Worst Setup Slack = +2.434 ns
+Worst Hold Slack  = +0.088 ns
+
+Setup TNS         = 0 ns
+Hold TNS          = 0 ns
+
+Setup Violations  = 0
+Hold Violations   = 0
+
+Max Slew Violations     = 0
+Max Capacitance Violations = 0
+```
+
+Worst setup slack occurred in the slow timing corner, while worst hold slack occurred in the fast timing corner.
+
+![Post-Route Multi-Corner STA](physical_design/images/10_Post_Route_STA_All_Corners.png)
+
+The final timing reports are available under:
+
+```text
+physical_design/reports/
+```
+
+---
+
+# Physical Verification and Signoff
+
+The final routed design completed physical verification successfully.
+
+| Check | Final Result |
+|---|---:|
+| Magic DRC | 0 violations |
+| KLayout DRC | 0 violations |
+| Antenna | 0 net / pin violations |
+| LVS | Circuits match uniquely |
+| Layout XOR | 0 differences |
+| Setup Violations | 0 |
+| Hold Violations | 0 |
+| Max Slew Violations | 0 |
+| Max Capacitance Violations | 0 |
+
+![Final Signoff](physical_design/images/11_Final_Signoff_Flow_Complete.png)
+
+Selected signoff reports are preserved in:
+
+```text
+physical_design/reports/
+```
+
+---
+
+# Final GDSII
+
+The complete RTL-to-GDSII flow produced the final physical layout:
+
+```text
+physical_design/final/top.gds
+```
+
+### Routed Metal View
+
+![Final GDS Metal Routing](physical_design/images/12_Final_GDS_Metal_Routing.png)
+
+### Full Layout View
+
+![Final GDS Full Layout](physical_design/images/13_Final_GDS_Full_Layout.png)
+
+The final layout contains the placed standard cells, clock distribution, power distribution, signal routing, vias, and upper-metal interconnect generated by the physical design flow.
+
+---
+
+# Final ASIC Results
+
+| Metric | Result |
+|---|---:|
+| Technology | SKY130 |
+| Standard-Cell Library | SKY130 HD |
+| Standard-Cell Instances | 1,838 |
+| Sequential Cells | 333 |
+| Integrated Clock Gates | 1 |
+| Core Utilization | 61.06% |
+| Die Area | 36,814.2 um^2 |
+| Standard-Cell Area | 18,630.4 um^2 |
+| Clock Buffers | 42 |
+| Clock Inverters | 26 |
+| Timing-Repair Buffers | 237 |
+| Worst Setup Slack | +2.434 ns |
+| Worst Hold Slack | +0.088 ns |
+| Setup TNS | 0 ns |
+| Hold TNS | 0 ns |
+| DRC Violations | 0 |
+| Antenna Violations | 0 |
+| LVS | Clean |
+| XOR Differences | 0 |
+
+---
+
+# Repository Structure
 
 ```text
 .
@@ -519,12 +559,29 @@ The same methodology and stimulus were used for both ON and OFF cases to provide
 │   ├── top.sv
 │   └── uart_tx.sv
 │
+├── rtl_asic/
+│   ├── FIR.sv
+│   ├── async_fifo.sv
+│   ├── power_controller.sv
+│   ├── top.sv
+│   ├── uart_tx.sv
+│   └── clk_gate.sv
+│
 ├── tb/
 │   ├── FIR_tb.sv
 │   ├── async_fifo_tb.sv
 │   ├── power_controller_tb.sv
 │   ├── top_tb.sv
 │   └── uart_tx_tb.sv
+│
+├── openlane/
+│   └── config.json
+│
+├── physical_design/
+│   ├── final/
+│   │   └── top.gds
+│   ├── images/
+│   └── reports/
 │
 ├── project_results/
 │   ├── CLOCK_GATING_ON/
@@ -537,81 +594,804 @@ The same methodology and stimulus were used for both ON and OFF cases to provide
 └── README.md
 ```
 
-Generated Quartus build directories, simulation databases, backup files, and large VCD files are excluded from the repository.
+Generated OpenLane run directories are intentionally excluded from version control. Selected final reports, screenshots, configuration files, ASIC RTL, and the final GDSII are retained as portfolio artifacts.
 
 ---
 
-## Tools
+# Tools and Technologies
 
-The project was developed and analyzed using:
+### RTL and Verification
 
 - SystemVerilog
-- Intel Quartus Prime Lite 25.1
 - Questa Altera FPGA Starter Edition
+
+### FPGA
+
+- Intel Quartus Prime Lite
 - Intel TimeQuest Timing Analyzer
 - Quartus Power Analyzer
 - Intel Platform Designer / Qsys
-- Tcl / SDC timing constraints
+
+### ASIC Physical Design
+
+- OpenLane 2
+- OpenROAD
+- Yosys
+- OpenSTA
+- SKY130 PDK
+- KLayout
+- Magic
+- Netgen
+
+### Constraints and Analysis
+
+- Tcl
+- SDC
+- Static Timing Analysis
+- Multi-clock timing
+- Multi-corner timing analysis
+- CDC
+- Clock Tree Synthesis
+- Timing closure
+- Physical verification
 
 ---
 
-## Rebuilding the Project
+# Key Engineering Topics Demonstrated
 
-1. Open `VLSI_project.qpf` in Quartus Prime.
-2. Verify that the target device is:
+This project demonstrates practical experience with:
 
-```text
-EP4CE115F29C7
-```
-
-3. Regenerate the `clk_gate` IP from:
-
-```text
-ip/clk_gate.qsys
-```
-
-if generated IP files are not already present.
-
-4. Run a full Quartus compilation.
-5. Run TimeQuest for timing analysis.
-6. Use the testbenches in `tb/` for RTL simulation.
-
-The repository intentionally excludes generated Quartus databases and generated IP output files so that the source tree remains compact and reproducible.
-
----
-
-## Project Summary
-
-This project demonstrates a complete RTL-to-analysis FPGA workflow including:
-
-- RTL design in SystemVerilog
-- FIR signal processing
+- SystemVerilog RTL design
+- Digital signal-processing datapaths
 - Multi-clock architecture
-- Asynchronous FIFO CDC
-- Gray-code pointer synchronization
+- Clock Domain Crossing
+- Gray-code asynchronous FIFO design
 - Two-flip-flop synchronizers
 - UART communication
 - Hardware clock gating
-- Wake-up handling
+- FPGA-specific clock-control primitives
+- ASIC integrated clock-gating cells
 - Functional verification
 - SDC timing constraints
 - Static Timing Analysis
-- Multicorner setup and hold analysis
-- FPGA resource analysis
-- Switching-activity-based power estimation
-- Dynamic power optimization
+- Setup and hold analysis
+- Synthesis
+- Floorplanning
+- Power distribution
+- Standard-cell placement
+- Clock Tree Synthesis
+- Hold-time repair
+- Global routing
+- Congestion analysis
+- Detailed routing
+- Parasitic extraction
+- Post-route multi-corner STA
+- Timing closure
+- DRC
+- LVS
+- Antenna checking
+- GDSII generation
 
-Final implementation results:
+---
+
+# Summary
+
+This project began as a dual-clock FPGA streaming architecture and was extended into a complete ASIC Physical Design implementation.
+
+The FPGA portion demonstrates RTL design, CDC, functional verification, timing analysis, hardware clock gating, and comparative power analysis.
+
+The ASIC portion demonstrates a complete RTL-to-GDSII flow on SKY130, including synthesis, floorplanning, placement, CTS, routing, parasitic extraction, multi-corner post-route STA, timing closure, DRC, LVS, antenna verification, and final GDSII generation.
+
+Final ASIC signoff achieved:
 
 ```text
-Worst Setup Slack       = +1.450 ns
-Worst Hold Slack        = +0.180 ns
-Design-wide TNS         = 0 ns
+Worst Setup Slack = +2.434 ns
+Worst Hold Slack  = +0.088 ns
+Setup TNS         = 0 ns
+Hold TNS          = 0 ns
 
-Logic Elements          = 445
-Registers               = 336
+DRC Violations    = 0
+Antenna Violations = 0
+LVS               = Clean
+XOR Differences   = 0
 
-Core Dynamic Power OFF  = 8.03 mW
-Core Dynamic Power ON   = 5.11 mW
-Estimated Reduction     = ~36.4%
+Final GDSII       = Generated
+```# SystemVerilog Streaming System - FPGA Implementation & ASIC Physical Design
+
+A complete digital design project developed from SystemVerilog RTL through two implementation flows:
+
+- **FPGA implementation** targeting Intel Cyclone IV E using Quartus Prime
+- **ASIC RTL-to-GDSII Physical Design** targeting SKY130 using OpenLane/OpenROAD
+
+The design implements a dual-clock streaming system containing a 4-tap FIR filter, asynchronous FIFO for clock-domain crossing, UART transmitter, and dynamic clock gating.
+
+The original design was synthesized, fitted, functionally verified, timing-analyzed, and power-analyzed as an FPGA implementation. The same RTL architecture was then adapted for an ASIC flow and taken through synthesis, floorplanning, placement, clock tree synthesis, routing, parasitic extraction, multi-corner static timing analysis, physical verification, and final GDSII generation.
+
+---
+
+## Project Highlights
+
+| Area | Result |
+|---|---|
+| RTL | SystemVerilog |
+| Clock Domains | 100 MHz / 10 MHz asynchronous clocks |
+| CDC | Gray-coded asynchronous FIFO with 2-FF synchronizers |
+| Signal Processing | 4-tap FIR filter |
+| Communication | UART TX at 9600 baud |
+| Power Optimization | Hardware clock gating |
+| FPGA Target | Intel Cyclone IV E |
+| ASIC Technology | SKY130 |
+| ASIC Flow | OpenLane / OpenROAD |
+| ASIC Standard-Cell Instances | 1,838 |
+| ASIC Core Utilization | 61.06% |
+| Post-Route Worst Setup Slack | +2.434 ns |
+| Post-Route Worst Hold Slack | +0.088 ns |
+| Setup / Hold TNS | 0 ns / 0 ns |
+| Final DRC Violations | 0 |
+| Antenna Violations | 0 |
+| LVS | Clean |
+| GDSII | Successfully generated |
+
+---
+
+## System Architecture
+
+The system contains two asynchronous clock domains:
+
+```text
+clk_fast = 100 MHz
+clk_slow = 10 MHz
+```
+
+Main data path:
+
+```text
+data_in / valid_in
+        |
+        v
+  Wake-Up Handling
+        |
+        v
+    4-Tap FIR
+        |
+        v
+ Asynchronous FIFO
+        |
+        v
+   UART Transmitter
+        |
+        v
+    tx_serial
+```
+
+The FIR operates in the fast clock domain. Filtered samples are transferred safely into the slow clock domain through an asynchronous FIFO and are then transmitted by the UART.
+
+### Top-Level RTL
+
+![Top-Level RTL](project_results/COMMON_DESIGN/rtl.png)
+
+---
+
+# RTL Design
+
+## FIR Filter
+
+The FIR filter uses four taps:
+
+```text
+Coefficients = [1, 2, 3, 4]
+Input width  = 8 bits
+Output width = 16 bits
+```
+
+The filter operates from the gated version of `clk_fast`.
+
+## Asynchronous FIFO
+
+The FIFO transfers 16-bit FIR results between the unrelated clock domains.
+
+CDC protection includes:
+
+- Independent read and write clocks
+- Binary read/write pointers
+- Binary-to-Gray pointer conversion
+- Two-flip-flop pointer synchronizers
+- Full and empty detection
+
+![Async FIFO](project_results/COMMON_DESIGN/fifo.png)
+
+## UART Transmitter
+
+The UART transmitter operates in the 10 MHz `clk_slow` domain and serializes FIFO data at 9600 baud.
+
+## Power Controller
+
+The power controller reduces switching activity in the FIR clock domain.
+
+After 10 consecutive inactive `clk_fast` cycles, the FIR clock is disabled. A new valid input immediately requests clock reactivation.
+
+Wake-up handling preserves the first sample arriving after an idle period.
+
+---
+
+# Clock Domain Crossing
+
+The design intentionally contains two asynchronous clock domains.
+
+Direct multi-bit transfer between these domains is avoided. The asynchronous FIFO forms the CDC boundary, while Gray-coded pointers are passed through two-stage synchronizers.
+
+The clocks are declared asynchronous in SDC:
+
+```tcl
+set_clock_groups -asynchronous \
+    -group [get_clocks {clk_fast}] \
+    -group [get_clocks {clk_slow}]
+```
+
+This prevents invalid synchronous setup/hold analysis between the unrelated clock domains while timing each domain independently.
+
+---
+
+# FPGA Implementation
+
+The original implementation targets:
+
+```text
+Intel Cyclone IV E
+EP4CE115F29C7
+```
+
+The FPGA flow was performed using Intel Quartus Prime Lite.
+
+## FPGA Clock Gating
+
+The FPGA implementation uses Intel `ALTCLKCTRL` for glitch-free hardware clock gating.
+
+```text
+valid_in
+   |
+   v
+Power Controller
+   |
+   v
+clk_en
+   |
+   v
+ALTCLKCTRL
+   |
+   v
+gated_clk
+   |
+   v
+FIR
+```
+
+A simple combinational clock gate such as:
+
+```systemverilog
+assign gated_clk = clk_fast & clk_en;
+```
+
+was intentionally avoided.
+
+## Functional Verification
+
+Individual SystemVerilog testbenches verify:
+
+- FIR operation
+- Power controller behavior
+- Asynchronous FIFO
+- UART transmitter
+- Complete top-level data flow
+- Clock shutdown after inactivity
+- Clock wake-up
+- Preservation of the first sample after wake-up
+
+### Clock Gating Enabled
+
+![Clock Gating ON](project_results/CLOCK_GATING_ON/SIMULATION/wave_clock_gating_on.png)
+
+### Clock Gating Disabled
+
+![Clock Gating OFF](project_results/CLOCK_GATING_OFF/SIMULATION/wave_clock_gating_off.png)
+
+---
+
+## FPGA Static Timing Analysis
+
+Timing analysis was performed using Intel TimeQuest.
+
+Final FPGA timing results:
+
+```text
+Worst Setup Slack = +1.450 ns
+Worst Hold Slack  = +0.180 ns
+Design-wide TNS   = 0 ns
+```
+
+![FPGA Multicorner Timing](project_results/COMMON_DESIGN/multicorner_timing_summary.png)
+
+### Worst Setup Path
+
+![Worst Setup Path](project_results/COMMON_DESIGN/STA_SETUP/worst_setup_path_slow_85C.png)
+
+### Worst Hold Path
+
+![Worst Hold Path](project_results/COMMON_DESIGN/STA_HOLD/worst_hold_path_fast_0C.png)
+
+The FPGA timing environment intentionally did not assign arbitrary board-level input/output delays because no external synchronous-device timing specification was defined.
+
+---
+
+## FPGA Resource Utilization
+
+| Resource | Usage |
+|---|---:|
+| Logic Elements | 445 / 114,480 |
+| Registers | 336 |
+| Pins | 13 |
+| Embedded Memory Bits | 0 |
+| DSP 9-bit Elements | 0 |
+| PLLs | 0 |
+
+The asynchronous FIFO is implemented using FPGA logic/registers rather than embedded memory, while the FIR coefficients are implemented without dedicated DSP blocks.
+
+![FPGA Resource Summary](project_results/COMMON_DESIGN/flow_summary_resources.png)
+
+---
+
+## FPGA Power Analysis
+
+Quartus Power Analyzer was used to compare the same fitted design and stimulus with clock gating enabled and disabled.
+
+```text
+Clock Gating OFF:
+Core Dynamic Power = 8.03 mW
+
+Clock Gating ON:
+Core Dynamic Power = 5.11 mW
+
+Estimated Reduction = ~36.4%
+```
+
+### Clock Gating OFF
+
+![Power OFF](project_results/CLOCK_GATING_OFF/POWER/power_summary_off.png)
+
+### Clock Gating ON
+
+![Power ON](project_results/CLOCK_GATING_ON/POWER/power_summary_on.png)
+
+The result represents a comparative post-fit power estimate rather than a physical board measurement. Quartus reported limited power-estimation confidence because some internal activity was estimated vectorlessly.
+
+---
+
+# ASIC Physical Design
+
+The RTL architecture was subsequently adapted for a complete ASIC Physical Design flow using:
+
+- OpenLane 2
+- OpenROAD
+- Yosys
+- OpenSTA
+- KLayout
+- Magic
+- Netgen
+- SKY130 PDK
+- SKY130 HD standard-cell library
+
+The implementation was taken from RTL through final GDSII.
+
+```text
+SystemVerilog RTL
+        |
+        v
+     Synthesis
+        |
+        v
+    Floorplanning
+        |
+        v
+ Power Distribution
+        |
+        v
+     Placement
+        |
+        v
+Clock Tree Synthesis
+        |
+        v
+   Timing Repair
+        |
+        v
+   Global Routing
+        |
+        v
+ Detailed Routing
+        |
+        v
+Parasitic Extraction
+        |
+        v
+Multi-Corner STA
+        |
+        v
+ Physical Signoff
+        |
+        v
+      GDSII
+```
+
+---
+
+## FPGA-to-ASIC Clock-Gating Adaptation
+
+The Intel `ALTCLKCTRL` primitive used by the FPGA implementation is device-specific and cannot be used in a standard-cell ASIC flow.
+
+For the ASIC implementation, it was replaced with a SKY130 integrated clock-gating cell:
+
+```text
+sky130_fd_sc_hd__dlclkp_1
+```
+
+The clock-gating control behavior remains part of the RTL architecture, while the implementation uses a technology-appropriate glitch-free clock cell.
+
+This also allows the gated FIR clock to participate correctly in clock-tree synthesis and static timing analysis.
+
+---
+
+# ASIC Timing Constraints
+
+Two primary clocks are defined:
+
+```tcl
+create_clock -name clk_fast -period 10.000 [get_ports {clk_fast}]
+create_clock -name clk_slow -period 100.000 [get_ports {clk_slow}]
+```
+
+The two domains are declared asynchronous.
+
+For the ASIC implementation, explicit interface assumptions were introduced:
+
+```text
+Input delay minimum = 0.5 ns
+Input delay maximum = 2.0 ns
+Clock uncertainty   = 0.2 ns
+```
+
+These values are design assumptions for the portfolio implementation rather than measured board/interface specifications.
+
+`rst_n` is an asynchronous reset and is intentionally not modeled as ordinary synchronous input data.
+
+`tx_serial` is a protocol-driven UART serial output rather than an externally synchronous output and is intentionally excluded from synchronous output timing analysis.
+
+The broad reset false-path approach was intentionally avoided so that reset-related timing behavior is not silently hidden.
+
+---
+
+# Floorplanning and Placement
+
+The final ASIC implementation contains:
+
+```text
+Standard-cell instances = 1,838
+Standard-cell area      = 18,630.4 um^2
+Core utilization        = 61.06%
+Macros                  = 0
+```
+
+Final die dimensions are approximately:
+
+```text
+186.585 um x 197.305 um
+```
+
+The design is implemented entirely using standard cells without embedded hard macros.
+
+---
+
+# Clock Tree Synthesis
+
+CTS builds physical clock distribution networks for:
+
+- `clk_fast`
+- `clk_slow`
+- Gated FIR clock
+
+The clock tree uses inserted clock buffers/inverters to control clock latency, transition, fanout, and skew.
+
+![CTS Clock Buffers](physical_design/images/03_CTS_Clock_Buffers.png)
+
+After CTS, hold analysis exposed short data paths that required repair. Timing-repair buffers were inserted automatically to increase minimum data-path delay while preserving setup timing.
+
+![Post-CTS Hold Repair](physical_design/images/04_Post-CTS_Hold_Repair.png)
+
+![Post-CTS STA](physical_design/images/05_Post-CTS_STA_After_Hold_Repair.png)
+
+---
+
+# Global Routing
+
+Global routing determines coarse routing paths and evaluates routing-resource demand before exact wire geometry is generated.
+
+The final routing process achieved zero global-routing overflow.
+
+![Global Routing Congestion](physical_design/images/07_Global_Routing_Congestion_Heatmap.png)
+
+---
+
+# Detailed Routing
+
+Detailed routing assigns exact tracks, metal layers, and vias while satisfying physical design rules.
+
+Routing-rule violations were iteratively repaired until the detailed router reached zero remaining violations.
+
+![Detailed Routing - Zero Violations](physical_design/images/08_Detailed_Routing_Zero_Violations.png)
+
+### Routed Metal Layers
+
+![Detailed Routing Metal Layers](physical_design/images/09_Detailed_Routing_Metal_Layers.png)
+
+---
+
+# Parasitic Extraction and Post-Route STA
+
+After routing, interconnect resistance and capacitance were extracted and included in timing analysis.
+
+Post-route timing was evaluated across nine PVT/RC analysis combinations.
+
+Final worst-case results:
+
+```text
+Worst Setup Slack = +2.434 ns
+Worst Hold Slack  = +0.088 ns
+
+Setup TNS         = 0 ns
+Hold TNS          = 0 ns
+
+Setup Violations  = 0
+Hold Violations   = 0
+
+Max Slew Violations     = 0
+Max Capacitance Violations = 0
+```
+
+Worst setup slack occurred in the slow timing corner, while worst hold slack occurred in the fast timing corner.
+
+![Post-Route Multi-Corner STA](physical_design/images/10_Post_Route_STA_All_Corners.png)
+
+The final timing reports are available under:
+
+```text
+physical_design/reports/
+```
+
+---
+
+# Physical Verification and Signoff
+
+The final routed design completed physical verification successfully.
+
+| Check | Final Result |
+|---|---:|
+| Magic DRC | 0 violations |
+| KLayout DRC | 0 violations |
+| Antenna | 0 net / pin violations |
+| LVS | Circuits match uniquely |
+| Layout XOR | 0 differences |
+| Setup Violations | 0 |
+| Hold Violations | 0 |
+| Max Slew Violations | 0 |
+| Max Capacitance Violations | 0 |
+
+![Final Signoff](physical_design/images/11_Final_Signoff_Flow_Complete.png)
+
+Selected signoff reports are preserved in:
+
+```text
+physical_design/reports/
+```
+
+---
+
+# Final GDSII
+
+The complete RTL-to-GDSII flow produced the final physical layout:
+
+```text
+physical_design/final/top.gds
+```
+
+### Routed Metal View
+
+![Final GDS Metal Routing](physical_design/images/12_Final_GDS_Metal_Routing.png)
+
+### Full Layout View
+
+![Final GDS Full Layout](physical_design/images/13_Final_GDS_Full_Layout.png)
+
+The final layout contains the placed standard cells, clock distribution, power distribution, signal routing, vias, and upper-metal interconnect generated by the physical design flow.
+
+---
+
+# Final ASIC Results
+
+| Metric | Result |
+|---|---:|
+| Technology | SKY130 |
+| Standard-Cell Library | SKY130 HD |
+| Standard-Cell Instances | 1,838 |
+| Sequential Cells | 333 |
+| Integrated Clock Gates | 1 |
+| Core Utilization | 61.06% |
+| Die Area | 36,814.2 um^2 |
+| Standard-Cell Area | 18,630.4 um^2 |
+| Clock Buffers | 42 |
+| Clock Inverters | 26 |
+| Timing-Repair Buffers | 237 |
+| Worst Setup Slack | +2.434 ns |
+| Worst Hold Slack | +0.088 ns |
+| Setup TNS | 0 ns |
+| Hold TNS | 0 ns |
+| DRC Violations | 0 |
+| Antenna Violations | 0 |
+| LVS | Clean |
+| XOR Differences | 0 |
+
+---
+
+# Repository Structure
+
+```text
+.
+├── constraints/
+│   └── project.sdc
+│
+├── ip/
+│   └── clk_gate.qsys
+│
+├── rtl/
+│   ├── FIR.sv
+│   ├── async_fifo.sv
+│   ├── power_controller.sv
+│   ├── top.sv
+│   └── uart_tx.sv
+│
+├── rtl_asic/
+│   ├── FIR.sv
+│   ├── async_fifo.sv
+│   ├── power_controller.sv
+│   ├── top.sv
+│   ├── uart_tx.sv
+│   └── clk_gate.sv
+│
+├── tb/
+│   ├── FIR_tb.sv
+│   ├── async_fifo_tb.sv
+│   ├── power_controller_tb.sv
+│   ├── top_tb.sv
+│   └── uart_tx_tb.sv
+│
+├── openlane/
+│   └── config.json
+│
+├── physical_design/
+│   ├── final/
+│   │   └── top.gds
+│   ├── images/
+│   └── reports/
+│
+├── project_results/
+│   ├── CLOCK_GATING_ON/
+│   ├── CLOCK_GATING_OFF/
+│   └── COMMON_DESIGN/
+│
+├── VLSI_project.qpf
+├── VLSI_project.qsf
+├── .gitignore
+└── README.md
+```
+
+Generated OpenLane run directories are intentionally excluded from version control. Selected final reports, screenshots, configuration files, ASIC RTL, and the final GDSII are retained as portfolio artifacts.
+
+---
+
+# Tools and Technologies
+
+### RTL and Verification
+
+- SystemVerilog
+- Questa Altera FPGA Starter Edition
+
+### FPGA
+
+- Intel Quartus Prime Lite
+- Intel TimeQuest Timing Analyzer
+- Quartus Power Analyzer
+- Intel Platform Designer / Qsys
+
+### ASIC Physical Design
+
+- OpenLane 2
+- OpenROAD
+- Yosys
+- OpenSTA
+- SKY130 PDK
+- KLayout
+- Magic
+- Netgen
+
+### Constraints and Analysis
+
+- Tcl
+- SDC
+- Static Timing Analysis
+- Multi-clock timing
+- Multi-corner timing analysis
+- CDC
+- Clock Tree Synthesis
+- Timing closure
+- Physical verification
+
+---
+
+# Key Engineering Topics Demonstrated
+
+This project demonstrates practical experience with:
+
+- SystemVerilog RTL design
+- Digital signal-processing datapaths
+- Multi-clock architecture
+- Clock Domain Crossing
+- Gray-code asynchronous FIFO design
+- Two-flip-flop synchronizers
+- UART communication
+- Hardware clock gating
+- FPGA-specific clock-control primitives
+- ASIC integrated clock-gating cells
+- Functional verification
+- SDC timing constraints
+- Static Timing Analysis
+- Setup and hold analysis
+- Synthesis
+- Floorplanning
+- Power distribution
+- Standard-cell placement
+- Clock Tree Synthesis
+- Hold-time repair
+- Global routing
+- Congestion analysis
+- Detailed routing
+- Parasitic extraction
+- Post-route multi-corner STA
+- Timing closure
+- DRC
+- LVS
+- Antenna checking
+- GDSII generation
+
+---
+
+# Summary
+
+This project began as a dual-clock FPGA streaming architecture and was extended into a complete ASIC Physical Design implementation.
+
+The FPGA portion demonstrates RTL design, CDC, functional verification, timing analysis, hardware clock gating, and comparative power analysis.
+
+The ASIC portion demonstrates a complete RTL-to-GDSII flow on SKY130, including synthesis, floorplanning, placement, CTS, routing, parasitic extraction, multi-corner post-route STA, timing closure, DRC, LVS, antenna verification, and final GDSII generation.
+
+Final ASIC signoff achieved:
+
+```text
+Worst Setup Slack = +2.434 ns
+Worst Hold Slack  = +0.088 ns
+Setup TNS         = 0 ns
+Hold TNS          = 0 ns
+
+DRC Violations    = 0
+Antenna Violations = 0
+LVS               = Clean
+XOR Differences   = 0
+
+Final GDSII       = Generated
 ```

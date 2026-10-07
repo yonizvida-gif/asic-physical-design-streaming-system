@@ -27,3 +27,11 @@ output_files/
 # OS files
 Thumbs.db
 .DS_Store
+# OpenLane generated runs
+openlane/runs/
+
+# Keep selected Physical Design reports
+!physical_design/reports/post_route_sta_summary.rpt
+
+
+README_FPGA_backup.md

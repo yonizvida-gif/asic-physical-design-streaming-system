@@ -1,0 +1,17 @@
+{
+    "DESIGN_NAME": "top",
+
+    "CLOCK_PORT": ["clk_fast", "clk_slow"],
+
+    "PNR_SDC_FILE": "dir::../constraints/project.sdc",
+    "SIGNOFF_SDC_FILE": "dir::../constraints/project.sdc",
+
+    "VERILOG_FILES": [
+        "dir::../rtl_asic/top.sv",
+        "dir::../rtl_asic/power_controller.sv",
+        "dir::../rtl_asic/FIR.sv",
+        "dir::../rtl_asic/async_fifo.sv",
+        "dir::../rtl_asic/uart_tx.sv",
+        "dir::../rtl_asic/clk_gate.sv"
+    ]
+}
